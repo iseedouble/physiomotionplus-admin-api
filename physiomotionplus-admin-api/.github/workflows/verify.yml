@@ -1,0 +1,16 @@
+name: Verify Admin API
+
+on:
+  pull_request:
+    branches: [develop, main]
+
+permissions:
+  contents: read
+
+jobs:
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build container image
+        run: docker build --pull --tag physiomotionplus-admin-api:verify .

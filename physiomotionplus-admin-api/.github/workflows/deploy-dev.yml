@@ -1,0 +1,66 @@
+name: Deploy Physiomotion Admin API (Dev)
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: physio-admin-api-dev
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/develop'
+    runs-on: ubuntu-latest
+    environment: dev
+    env:
+      DEPLOY_ENV: dev
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER }}
+          service_account: ${{ vars.DEPLOYER_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${{ vars.GCP_REGION }}-docker.pkg.dev" --quiet
+      - name: Build and push immutable image
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          AR_REPOSITORY: ${{ vars.ARTIFACT_REGISTRY_REPOSITORY }}
+        run: |
+          set -euo pipefail
+          image="${REGION}-docker.pkg.dev/${PROJECT_ID}/${AR_REPOSITORY}/physiomotionplus-admin-api:${GITHUB_SHA}"
+          docker build --pull -t "$image" .
+          docker push "$image"
+          echo "IMAGE=$image" >> "$GITHUB_ENV"
+      - name: Deploy to Cloud Run
+        env:
+          PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+          REGION: ${{ vars.GCP_REGION }}
+          SERVICE: ${{ vars.CLOUD_RUN_SERVICE }}
+          RUNTIME_SA: ${{ vars.CLOUD_RUN_RUNTIME_SERVICE_ACCOUNT }}
+          FIRESTORE_PROJECT: ${{ vars.FIRESTORE_PROJECT_ID }}
+          FIRESTORE_DATABASE: ${{ vars.FIRESTORE_DATABASE_ID }}
+          VIDEO_BUCKET_NAME: ${{ vars.VIDEO_BUCKET }}
+          VIDEO_ADMIN_UIDS: ${{ vars.VIDEO_ALLOWED_ADMIN_UIDS }}
+        run: |
+          set -euo pipefail
+          for value in "$PROJECT_ID" "$REGION" "$SERVICE" "$RUNTIME_SA" "$FIRESTORE_PROJECT" "$FIRESTORE_DATABASE" "$VIDEO_BUCKET_NAME" "$VIDEO_ADMIN_UIDS"; do
+            [[ -n "$value" ]] || { echo "A required dev deployment variable is empty." >&2; exit 1; }
+          done
+          gcloud run deploy "$SERVICE" \
+            --image "$IMAGE" \
+            --region "$REGION" \
+            --project "$PROJECT_ID" \
+            --platform managed \
+            --allow-unauthenticated \
+            --service-account "$RUNTIME_SA" \
+            --update-env-vars "^@^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}@FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}@VIDEO_BUCKET=${VIDEO_BUCKET_NAME}@VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}" \
+            --quiet
