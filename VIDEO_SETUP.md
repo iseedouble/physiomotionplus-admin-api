@@ -15,11 +15,12 @@ Both APIs use the same Firestore database (`physiomotionplusdb`) and private Clo
 - Admin service account: **Storage Object Admin** on the selected bucket, plus Firestore read/write access in `physiomotionplusdb`.
 - Customer service account: **Storage Object Viewer** on the selected bucket, plus Firestore read access in `physiomotionplusdb`.
 - Keep Public Access Prevention and uniform bucket-level access enabled. Do not grant `allUsers` access.
-- Service-account JSON credentials sign URLs locally. For a keyless production runtime, set `VIDEO_SIGNER_SERVICE_ACCOUNT` on the customer API to its signing service account email, enable IAM Service Account Credentials API, and grant the runtime identity `iam.serviceAccounts.signBlob` on that signing account (for example, Service Account Token Creator). The signing account also needs Storage Object Viewer on the bucket.
+- Service-account JSON credentials sign URLs locally. For a keyless production runtime, set `VIDEO_SIGNER_SERVICE_ACCOUNT` on each API to its signing service account email, enable IAM Service Account Credentials API, and grant the runtime identity `iam.serviceAccounts.signBlob` on that signing account (for example, Service Account Token Creator). The signing account also needs Storage Object Viewer on the bucket. This applies to admin previews as well as customer playback.
 
 ## Endpoints
 
 - `GET /api/admin/videos` lists video metadata, not playable URLs.
+- `GET /api/admin/videos/{exerciseId}/preview` returns `{url, expiresAt, contentType}` with a 60-minute signed playback URL for an allowlisted PHYSIO admin. The response is `no-store`. The admin UI exposes previews in the video library, module exercise list, and exercise editor using the same native player as the client UI.
 - `PUT /api/admin/videos/{exerciseId}` takes multipart field `file` (MP4/WebM, max 250 MB) and replaces that exercise's prior video.
 - `DELETE /api/admin/videos/{exerciseId}` removes the Firestore reference and the private object.
 - `GET /api/exercises/{exerciseId}/video` returns `{url, expiresAt, contentType}` for authenticated customers. An absent video returns 404. The customer API currently allows every authenticated customer; tier and assignment checks must be added here before restricting plans.

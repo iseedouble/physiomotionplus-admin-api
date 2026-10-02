@@ -1,5 +1,8 @@
 package com.physiomotionplus.physiomotionplusadminapi.api;
 
+import com.google.auth.ServiceAccountSigner;
+import com.google.auth.oauth2.GoogleCredentials;
+import com.google.auth.oauth2.ImpersonatedCredentials;
 import com.google.cloud.firestore.DocumentSnapshot;
 import com.google.cloud.firestore.Firestore;
 import com.google.cloud.storage.BlobId;
@@ -11,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -49,12 +53,15 @@ public class VideoController {
     private final Storage storage;
     private final String bucket;
     private final Set<String> allowedAdminUids;
+    private final String signerServiceAccount;
 
     public VideoController(Firestore firestore, Storage storage, @Value("${videos.bucket}") String bucket,
-                           @Value("${videos.allowed-admin-uids:}") String allowedAdminUids) {
+                           @Value("${videos.allowed-admin-uids:}") String allowedAdminUids,
+                           @Value("${videos.signer-service-account:}") String signerServiceAccount) {
         this.firestore = firestore;
         this.storage = storage;
         this.bucket = bucket;
+        this.signerServiceAccount = signerServiceAccount;
         this.allowedAdminUids = Arrays.stream(allowedAdminUids.split(","))
                 .map(String::trim).filter(value -> !value.isBlank()).collect(Collectors.toUnmodifiableSet());
     }
@@ -75,6 +82,44 @@ public class VideoController {
         } catch (Exception failure) {
             throw unavailable("Could not list videos", failure);
         }
+    }
+
+    public record PlaybackLink(String url, String expiresAt, String contentType) { }
+
+    @GetMapping("/{exerciseId}/preview")
+    public ResponseEntity<PlaybackLink> preview(@PathVariable String exerciseId,
+                                               @AuthenticationPrincipal FirebasePrincipal principal) {
+        validateExerciseId(exerciseId);
+        requireVideoAdmin(principal);
+        try {
+            DocumentSnapshot doc = firestore.collection(COLLECTION).document(exerciseId)
+                    .get().get(15, TimeUnit.SECONDS);
+            if (!doc.exists()) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Video not available");
+            String objectName = doc.getString("objectName");
+            if (!bucket.equals(doc.getString("bucket")) || objectName == null
+                    || !objectName.startsWith("exercises/" + exerciseId + "/")) {
+                throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Video not available");
+            }
+            BlobInfo object = BlobInfo.newBuilder(BlobId.of(bucket, objectName)).build();
+            String url = storage.signUrl(object, 60, TimeUnit.MINUTES,
+                    Storage.SignUrlOption.withV4Signature(), Storage.SignUrlOption.signWith(previewSigner())).toString();
+            return ResponseEntity.ok().header("Cache-Control", "no-store")
+                    .body(new PlaybackLink(url, Instant.now().plusSeconds(3600).toString(), doc.getString("contentType")));
+        } catch (ResponseStatusException expected) {
+            throw expected;
+        } catch (Exception failure) {
+            throw unavailable("Could not create video preview", failure);
+        }
+    }
+
+    private ServiceAccountSigner previewSigner() throws IOException {
+        GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
+        if (credentials instanceof ServiceAccountSigner signer) return signer;
+        if (!signerServiceAccount.isBlank()) {
+            return ImpersonatedCredentials.create(credentials, signerServiceAccount, null,
+                    List.of("https://www.googleapis.com/auth/cloud-platform"), 3600);
+        }
+        throw new IllegalStateException("Configure VIDEO_SIGNER_SERVICE_ACCOUNT for keyless credentials");
     }
 
     @PutMapping(path = "/{exerciseId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
