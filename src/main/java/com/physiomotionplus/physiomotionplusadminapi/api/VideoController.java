@@ -114,11 +114,11 @@ public class VideoController {
 
     private ServiceAccountSigner previewSigner() throws IOException {
         GoogleCredentials credentials = GoogleCredentials.getApplicationDefault();
-        if (credentials instanceof ServiceAccountSigner signer) return signer;
         if (!signerServiceAccount.isBlank()) {
             return ImpersonatedCredentials.create(credentials, signerServiceAccount, null,
                     List.of("https://www.googleapis.com/auth/cloud-platform"), 3600);
         }
+        if (credentials instanceof ServiceAccountSigner signer) return signer;
         throw new IllegalStateException("Configure VIDEO_SIGNER_SERVICE_ACCOUNT for keyless credentials");
     }
 
