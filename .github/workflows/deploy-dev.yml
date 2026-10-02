@@ -50,9 +50,10 @@ jobs:
           FIRESTORE_DATABASE: ${{ vars.FIRESTORE_DATABASE_ID }}
           VIDEO_BUCKET_NAME: ${{ vars.VIDEO_BUCKET }}
           VIDEO_ADMIN_UIDS: ${{ vars.VIDEO_ALLOWED_ADMIN_UIDS }}
+          VIDEO_SIGNER: ${{ vars.VIDEO_SIGNER_SERVICE_ACCOUNT }}
         run: |
           set -euo pipefail
-          for value in "$PROJECT_ID" "$REGION" "$SERVICE" "$RUNTIME_SA" "$FIRESTORE_PROJECT" "$FIRESTORE_DATABASE" "$VIDEO_BUCKET_NAME" "$VIDEO_ADMIN_UIDS"; do
+          for value in "$PROJECT_ID" "$REGION" "$SERVICE" "$RUNTIME_SA" "$FIRESTORE_PROJECT" "$FIRESTORE_DATABASE" "$VIDEO_BUCKET_NAME" "$VIDEO_ADMIN_UIDS" "$VIDEO_SIGNER"; do
             [[ -n "$value" ]] || { echo "A required dev deployment variable is empty." >&2; exit 1; }
           done
           gcloud run deploy "$SERVICE" \
@@ -62,5 +63,5 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account "$RUNTIME_SA" \
-            --update-env-vars "^@^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}@FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}@VIDEO_BUCKET=${VIDEO_BUCKET_NAME}@VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}" \
+            --update-env-vars "^@^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}@FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}@VIDEO_BUCKET=${VIDEO_BUCKET_NAME}@VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}@VIDEO_SIGNER_SERVICE_ACCOUNT=${VIDEO_SIGNER}" \
             --quiet
