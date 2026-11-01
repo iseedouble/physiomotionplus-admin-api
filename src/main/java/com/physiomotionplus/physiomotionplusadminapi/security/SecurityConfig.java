@@ -51,7 +51,7 @@ public class SecurityConfig {
                 .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .exceptionHandling(exceptions -> exceptions.authenticationEntryPoint(entryPoint).accessDeniedHandler(deniedHandler))
                 .authorizeHttpRequests(auth -> auth
-                        .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                        .dispatcherTypeMatchers(DispatcherType.ERROR, DispatcherType.ASYNC).permitAll()
                         .requestMatchers(HttpMethod.OPTIONS, "/**").permitAll()
                         .anyRequest().authenticated())
                 .addFilterBefore(filter, UsernamePasswordAuthenticationFilter.class);

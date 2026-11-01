@@ -67,7 +67,7 @@ public class VideoController {
     }
 
     public record VideoMetadata(String exerciseId, String filename, String contentType, long size,
-                                String uploadedAt) { }
+                                String uploadedAt, String folderPath) { }
 
     @GetMapping
     public List<VideoMetadata> list(@AuthenticationPrincipal FirebasePrincipal principal) {
@@ -176,7 +176,7 @@ public class VideoController {
                 throw failure;
             }
             if (previous.exists()) deleteOldObject(previous);
-            return new VideoMetadata(exerciseId, filename, contentType, file.getSize(), uploadedAt);
+            return new VideoMetadata(exerciseId, filename, contentType, file.getSize(), uploadedAt, folderPath(objectName));
         } catch (ResponseStatusException invalidFile) {
             throw invalidFile;
         } catch (Exception failure) {
@@ -217,7 +217,12 @@ public class VideoController {
     private VideoMetadata metadata(DocumentSnapshot doc) {
         Long size = doc.getLong("size");
         return new VideoMetadata(doc.getId(), doc.getString("filename"), doc.getString("contentType"),
-                size == null ? 0 : size, doc.getString("uploadedAt"));
+                size == null ? 0 : size, doc.getString("uploadedAt"), folderPath(doc.getString("objectName")));
+    }
+
+    private String folderPath(String objectName) {
+        if (objectName == null || !objectName.contains("/")) return "";
+        return objectName.substring(0, objectName.lastIndexOf('/'));
     }
 
     private void validateExerciseId(String exerciseId) {

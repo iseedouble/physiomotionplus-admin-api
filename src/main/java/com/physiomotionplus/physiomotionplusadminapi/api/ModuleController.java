@@ -88,6 +88,28 @@ public class ModuleController {
         } catch (Exception failure) { throw failure(failure); }
     }
 
+    @DeleteMapping("/{id}")
+    @ResponseStatus(HttpStatus.NO_CONTENT)
+    public void delete(@PathVariable String id, @RequestParam long version,
+                       @AuthenticationPrincipal FirebasePrincipal principal) {
+        authorize(principal);
+        validateId(id);
+        if (version < 0) throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid module version");
+        try {
+            firestore.runTransaction(tx -> {
+                var ref = firestore.collection("modules").document(id);
+                var previous = tx.get(ref).get();
+                if (!previous.exists()) return null;
+                long currentVersion = previous.getLong("version") == null ? 0 : previous.getLong("version");
+                if (currentVersion != version) throw new ResponseStatusException(HttpStatus.CONFLICT,
+                        "This module changed in another session. Reload before deleting.");
+                // Videos are independent library assets and may be reused by other modules.
+                tx.delete(ref);
+                return null;
+            }).get(20, TimeUnit.SECONDS);
+        } catch (Exception failure) { throw failure(failure); }
+    }
+
     private void authorize(FirebasePrincipal principal) {
         if (principal == null || admins.stream().map(String::trim).noneMatch(principal.uid()::equals))
             throw new ResponseStatusException(HttpStatus.FORBIDDEN, "This account cannot manage modules");
