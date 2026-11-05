@@ -51,11 +51,18 @@ jobs:
           VIDEO_BUCKET_NAME: ${{ vars.VIDEO_BUCKET }}
           VIDEO_ADMIN_UIDS: ${{ vars.VIDEO_ALLOWED_ADMIN_UIDS }}
           VIDEO_SIGNER: ${{ vars.VIDEO_SIGNER_SERVICE_ACCOUNT }}
+          CARE_PUSH: ${{ vars.CARE_PUSH_ENABLED || 'false' }}
+          CARE_SUBSCRIPTION: ${{ vars.CARE_REQUIRE_SUBSCRIPTION || 'true' }}
+          CARE_CLIENT: ${{ vars.CARE_CLIENT_URL }}
+          CARE_PHYSIOS: ${{ vars.CARE_PHYSIO_UIDS || vars.VIDEO_ALLOWED_ADMIN_UIDS }}
         run: |
           set -euo pipefail
           for value in "$PROJECT_ID" "$REGION" "$SERVICE" "$RUNTIME_SA" "$FIRESTORE_PROJECT" "$FIRESTORE_DATABASE" "$VIDEO_BUCKET_NAME" "$VIDEO_ADMIN_UIDS" "$VIDEO_SIGNER"; do
             [[ -n "$value" ]] || { echo "A required dev deployment variable is empty." >&2; exit 1; }
           done
+          [[ -n "$CARE_CLIENT" ]] || { echo "Set CARE_CLIENT_URL to the client website origin." >&2; exit 1; }
+          worker_flags=(--cpu-throttling --min-instances=0)
+          if [[ "$CARE_PUSH" == "true" ]]; then worker_flags=(--no-cpu-throttling --min-instances=1); fi
           gcloud run deploy "$SERVICE" \
             --image "$IMAGE" \
             --region "$REGION" \
@@ -63,5 +70,6 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account "$RUNTIME_SA" \
-            --update-env-vars "^~^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}~FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}~VIDEO_BUCKET=${VIDEO_BUCKET_NAME}~VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}~VIDEO_SIGNER_SERVICE_ACCOUNT=${VIDEO_SIGNER}" \
+            --timeout=300 "${worker_flags[@]}" \
+            --update-env-vars "^~^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}~FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}~VIDEO_BUCKET=${VIDEO_BUCKET_NAME}~VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}~VIDEO_SIGNER_SERVICE_ACCOUNT=${VIDEO_SIGNER}~CARE_PUSH_ENABLED=${CARE_PUSH}~CARE_REQUIRE_SUBSCRIPTION=${CARE_SUBSCRIPTION}~CARE_CLIENT_URL=${CARE_CLIENT}~CARE_PHYSIO_UIDS=${CARE_PHYSIOS}" \
             --quiet

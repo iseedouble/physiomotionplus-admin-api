@@ -10,9 +10,11 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/care")
 public class CareController {
   private final CareService care;
+  private final CareEventStream live;
 
-  public CareController(CareService care) {
+  public CareController(CareService care, CareEventStream live) {
     this.care = care;
+    this.live = live;
   }
 
   @ModelAttribute
@@ -22,6 +24,15 @@ public class CareController {
 
   private CareService.Actor actor(FirebasePrincipal p) {
     return care.actor(p.uid(), p.email(), p.displayName(), p.token().isEmailVerified());
+  }
+
+  @GetMapping(value = "/events", produces = "text/event-stream")
+  org.springframework.web.servlet.mvc.method.annotation.SseEmitter events(
+      @AuthenticationPrincipal FirebasePrincipal p,
+      @RequestParam(defaultValue = "") String thread,
+      HttpServletResponse response) throws Exception {
+    response.setHeader("X-Accel-Buffering", "no");
+    return live.open(actor(p), thread);
   }
 
   @GetMapping("/directory")

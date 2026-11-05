@@ -1,0 +1,8 @@
+.gcloudignore
+.git
+.idea
+.vscode
+target/
+.env
+.env.*
+*.log

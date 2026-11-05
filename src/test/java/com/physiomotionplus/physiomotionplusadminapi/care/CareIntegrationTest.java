@@ -17,6 +17,7 @@ import org.springframework.web.server.ResponseStatusException;
 class CareIntegrationTest {
   Firestore db;
   CareService client, physio;
+  CareEventStream clientEvents;
   CareService.Actor alice, bob, pat, other;
 
   @BeforeEach
@@ -32,6 +33,7 @@ class CareIntegrationTest {
     physio =
         new CareService(
             db, null, null, "physio", "pat,other", "http://localhost:4200", false, false);
+    clientEvents = new CareEventStream(db, client);
     alice = client.actor("alice", "alice@example.com", "Alice", true);
     bob = client.actor("bob", "bob@example.com", "Bob", true);
     pat = physio.actor("pat", "pat@example.com", "Pat", true);
@@ -51,6 +53,7 @@ class CareIntegrationTest {
 
   @AfterEach
   void close() throws Exception {
+    clientEvents.shutdown();
     client.close();
     physio.close();
     db.close();
@@ -89,7 +92,7 @@ class CareIntegrationTest {
     denied(404, () -> client.messages(bob, a, 0));
     denied(404, () -> client.send(bob, a, new CareController.Message("two", "intrusion")));
     denied(404, () -> physio.messages(other, a, 0));
-    denied(404, () -> client.events(bob, a));
+    denied(404, () -> clientEvents.open(bob, a));
     assertEquals(1, ((List<?>) physio.messages(pat, a, 0)).size());
     assertEquals(0, ((List<?>) client.messages(bob, b, 0)).size());
   }
@@ -111,7 +114,7 @@ class CareIntegrationTest {
     physio.decide(pat, c, "ended");
     denied(403, () -> client.messages(alice, t, 0));
     denied(403, () -> physio.send(pat, t, new CareController.Message("two", "Reply")));
-    denied(403, () -> client.events(alice, t));
+    denied(403, () -> clientEvents.open(alice, t));
     connect(alice);
     assertNotEquals(t, open(alice));
   }
