@@ -62,5 +62,7 @@ jobs:
             --platform managed \
             --allow-unauthenticated \
             --service-account "$RUNTIME_SA" \
+            --timeout=60 --cpu-throttling --min-instances=0 \
             --update-env-vars "^@^FIRESTORE_PROJECT_ID=${FIRESTORE_PROJECT}@FIRESTORE_DATABASE_ID=${FIRESTORE_DATABASE}@VIDEO_BUCKET=${VIDEO_BUCKET_NAME}@VIDEO_ALLOWED_ADMIN_UIDS=${VIDEO_ADMIN_UIDS}" \
+            --remove-env-vars CARE_PUSH_ENABLED \
             --quiet

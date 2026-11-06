@@ -10,11 +10,9 @@ import org.springframework.web.bind.annotation.*;
 @RequestMapping("/api/care")
 public class CareController {
   private final CareService care;
-  private final CareEventStream live;
 
-  public CareController(CareService care, CareEventStream live) {
+  public CareController(CareService care) {
     this.care = care;
-    this.live = live;
   }
 
   @ModelAttribute
@@ -24,26 +22,6 @@ public class CareController {
 
   private CareService.Actor actor(FirebasePrincipal p) {
     return care.actor(p.uid(), p.email(), p.displayName(), p.token().isEmailVerified());
-  }
-
-  @GetMapping(value = "/events", produces = "text/event-stream")
-  org.springframework.web.servlet.mvc.method.annotation.SseEmitter events(
-      @AuthenticationPrincipal FirebasePrincipal p,
-      @RequestParam(defaultValue = "") String thread,
-      @RequestParam(defaultValue = "") String subscription,
-      @RequestParam(defaultValue = "") String lease,
-      HttpServletResponse response) throws Exception {
-    response.setHeader("X-Accel-Buffering", "no");
-    return live.open(actor(p), thread,
-        subscription.isEmpty() ? UUID.randomUUID().toString() : subscription,
-        lease.isEmpty() ? UUID.randomUUID().toString() : lease);
-  }
-
-  @DeleteMapping("/events")
-  Object closeEvents(@AuthenticationPrincipal FirebasePrincipal p,
-      @RequestParam String subscription, @RequestParam String lease) {
-    live.release(actor(p), subscription, lease);
-    return Map.of("ok", true);
   }
 
   @GetMapping("/directory")
@@ -135,19 +113,4 @@ public class CareController {
     return care.send(actor(p), id, body);
   }
 
-  public record Device(String token) {}
-
-  @PutMapping("/device")
-  Object device(@AuthenticationPrincipal FirebasePrincipal p, @RequestBody Device body)
-      throws Exception {
-    care.device(actor(p), body.token(), false);
-    return Map.of("ok", true);
-  }
-
-  @DeleteMapping("/device")
-  Object removeDevice(@AuthenticationPrincipal FirebasePrincipal p, @RequestBody Device body)
-      throws Exception {
-    care.device(actor(p), body.token(), true);
-    return Map.of("ok", true);
-  }
 }

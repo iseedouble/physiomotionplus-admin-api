@@ -2,10 +2,6 @@ package com.physiomotionplus.physiomotionplusadminapi.care;
 
 import com.google.api.core.ApiFuture;
 import com.google.cloud.firestore.*;
-import com.google.firebase.FirebaseApp;
-import com.google.firebase.auth.FirebaseAuth;
-import com.google.firebase.messaging.*;
-import jakarta.annotation.PreDestroy;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.util.*;
@@ -19,34 +15,26 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class CareService {
   private final Firestore db;
-  private final FirebaseApp app;
   private final InvitationMail mail;
   private final String audience, clientUrl;
   private final Set<String> admins;
-  private final boolean pushEnabled, requireSubscription;
-  private final ScheduledExecutorService timers = Executors.newScheduledThreadPool(2);
-  private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CareService.class);
+  private final boolean requireSubscription;
 
   public CareService(
       Firestore db,
-      FirebaseApp app,
       InvitationMail mail,
       @Value("${care.audience:client}") String audience,
       @Value("${care.physio-uids:${videos.allowed-admin-uids:}}") String admins,
       @Value("${care.client-url:http://localhost:4200}") String clientUrl,
-      @Value("${care.push-enabled:false}") boolean pushEnabled,
       @Value("${care.require-subscription:true}") boolean requireSubscription) {
     this.db = db;
-    this.app = app;
     this.mail = mail;
     this.audience = audience;
     this.clientUrl = clientUrl.replaceAll("/+$", "");
     this.admins = new HashSet<>(Arrays.asList(admins.trim().split("\\s*,\\s*")));
-    this.pushEnabled = pushEnabled;
     this.requireSubscription = requireSubscription;
     if (!Set.of("client", "physio").contains(audience))
       throw new IllegalArgumentException("Invalid care audience");
-    if (pushEnabled) timers.scheduleWithFixedDelay(this::deliver, 10, 15, TimeUnit.SECONDS);
   }
 
   public record Actor(String uid, String email, String name, String role) {
@@ -232,7 +220,6 @@ public class CareService {
                       "requestCount",
                       requests + 1));
               if (invite != null) tx.update(invite.getReference(), "used", true);
-              enqueue(tx, "physio", physio, connectionId, "connection");
               record.put("id", connectionId);
               return record;
             }));
@@ -258,12 +245,6 @@ public class CareService {
               tx.update(ref, Map.of("status", status, "updatedAt", System.currentTimeMillis()));
               if (l.exists() && connectionId.equals(l.getString("connectionId")))
                 tx.update(lock, "status", status);
-              enqueue(
-                  tx,
-                  a.role.equals("physio") ? "client" : "physio",
-                  c.getString(a.role.equals("physio") ? "clientId" : "physioId"),
-                  connectionId,
-                  "connection");
               return Map.of("status", status);
             }));
   }
@@ -446,211 +427,10 @@ public class CareService {
               tx.set(rateRef, Map.of("lastSent", now));
               tx.update(ref, Map.of("updatedAt", now, "sequence", seq));
               tx.update(c.getReference(), "updatedAt", now);
-              String target = a.role.equals("client") ? "physio" : "client";
-              enqueue(tx, target, current.getString(target + "Id"), threadId, "message");
               var result = new HashMap<>(m);
               result.put("id", message.id());
               return result;
             }));
   }
 
-  void enqueue(Transaction tx, String target, String uid, String context, String type) {
-    tx.set(
-        db.collection("careOutbox_" + target).document(),
-        Map.of(
-            "uid",
-            uid,
-            "context",
-            context,
-            "type",
-            type,
-            "createdAt",
-            System.currentTimeMillis(),
-            "nextAttempt",
-            System.currentTimeMillis(),
-            "attempts",
-            0L));
-  }
-
-  void device(Actor a, String token, boolean remove) throws Exception {
-    text(token, 4096);
-    var ref = db.collection("careDevices_" + audience).document(hash(token));
-    await(
-        db.runTransaction(
-            tx -> {
-              var old = tx.get(ref).get();
-              if (remove) {
-                if (old.exists() && a.uid.equals(old.getString("uid"))) tx.delete(ref);
-              } else {
-                // Serialize registrations per account and cap retained devices to bound fan-out.
-                var lock = db.collection("careDeviceLocks_" + audience).document(a.uid);
-                tx.get(lock).get();
-                var devices =
-                    tx.get(db.collection("careDevices_" + audience).whereEqualTo("uid", a.uid))
-                        .get()
-                        .getDocuments();
-                if (devices.size() >= 10
-                    && devices.stream().noneMatch(d -> d.getId().equals(ref.getId()))) {
-                  var oldest =
-                      devices.stream()
-                          .min(Comparator.comparingLong(d -> d.getLong("updatedAt")))
-                          .orElseThrow();
-                  tx.delete(oldest.getReference());
-                }
-                tx.set(lock, Map.of("updatedAt", System.currentTimeMillis()));
-                tx.set(
-                    ref,
-                    Map.of("uid", a.uid, "token", token, "updatedAt", System.currentTimeMillis()));
-              }
-              return true;
-            }));
-  }
-
-  private void deliver() {
-    if (!pushEnabled) return;
-    try {
-      var jobs =
-          await(
-              db.collection("careOutbox_" + audience)
-                  .whereLessThanOrEqualTo("nextAttempt", System.currentTimeMillis())
-                  .limit(30)
-                  .get());
-      for (var job : jobs.getDocuments()) {
-        String lease = UUID.randomUUID().toString();
-        boolean claimed =
-            await(
-                db.runTransaction(
-                    tx -> {
-                      var current = tx.get(job.getReference()).get();
-                      if (!current.exists()
-                          || current.getLong("nextAttempt") > System.currentTimeMillis())
-                        return false;
-                      tx.update(
-                          job.getReference(),
-                          Map.of(
-                              "nextAttempt", System.currentTimeMillis() + 120000, "lease", lease));
-                      return true;
-                    }));
-        if (!claimed) continue;
-        try {
-          String uid = job.getString("uid");
-          // Recheck membership before dispatch; ended relationships never send message alerts.
-          boolean permitted = job.getLong("createdAt") > System.currentTimeMillis() - 7L * 86400000;
-          if (audience.equals("physio") && !admins.contains(uid)) permitted = false;
-          if (permitted) {
-            try {
-              var user = FirebaseAuth.getInstance(app).getUser(uid);
-              permitted = !user.isDisabled() && user.isEmailVerified();
-            } catch (com.google.firebase.auth.FirebaseAuthException e) {
-              if (e.getAuthErrorCode() == com.google.firebase.auth.AuthErrorCode.USER_NOT_FOUND)
-                permitted = false;
-              else throw e;
-            }
-          }
-          if ("message".equals(job.getString("type"))) {
-            var t = await(db.collection("careThreads").document(job.getString("context")).get());
-            permitted = permitted && t.exists() && uid.equals(t.getString(audience + "Id"));
-            if (permitted)
-              permitted =
-                  "active"
-                      .equals(
-                          await(connections().document(t.getString("connectionId")).get())
-                              .getString("status"));
-          }
-          if (permitted)
-            for (var device :
-                await(db.collection("careDevices_" + audience).whereEqualTo("uid", uid).get())
-                    .getDocuments()) {
-              boolean ownsLease =
-                  await(
-                      db.runTransaction(
-                          tx -> {
-                            var c = tx.get(job.getReference()).get();
-                            if (!c.exists() || !lease.equals(c.getString("lease"))) return false;
-                            tx.update(
-                                job.getReference(),
-                                "nextAttempt",
-                                System.currentTimeMillis() + 120000);
-                            return true;
-                          }));
-              if (!ownsLease) break;
-              var sent = await(job.getReference().get()).get("deliveredDevices");
-              if (sent instanceof List<?> list && list.contains(device.getId())) continue;
-              if (device.getLong("updatedAt") < System.currentTimeMillis() - 30L * 86400000) {
-                await(device.getReference().delete());
-                continue;
-              }
-              try {
-                FirebaseMessaging.getInstance(app)
-                    .send(
-                        Message.builder()
-                            .setToken(device.getString("token"))
-                            .setNotification(
-                                Notification.builder()
-                                    .setTitle("Physiomotion Plus")
-                                    .setBody(
-                                        "You have a new private update. / Nouvelle mise à jour"
-                                            + " privée.")
-                                    .build())
-                            .setWebpushConfig(
-                                WebpushConfig.builder()
-                                    .putHeader("TTL", "3600")
-                                    .setNotification(
-                                        WebpushNotification.builder()
-                                            .setTag("care-" + job.getId())
-                                            .build())
-                                    .build())
-                            .putData("path", "/messages")
-                            .build());
-                await(
-                    job.getReference()
-                        .update("deliveredDevices", FieldValue.arrayUnion(device.getId())));
-              } catch (FirebaseMessagingException e) {
-                if (e.getMessagingErrorCode() == MessagingErrorCode.UNREGISTERED)
-                  await(device.getReference().delete());
-                else throw e;
-              }
-            }
-          await(
-              db.runTransaction(
-                  tx -> {
-                    var c = tx.get(job.getReference()).get();
-                    if (c.exists() && lease.equals(c.getString("lease")))
-                      tx.delete(job.getReference());
-                    return true;
-                  }));
-        } catch (Exception failure) {
-          long attempts = job.getLong("attempts") + 1;
-          await(
-              db.runTransaction(
-                  tx -> {
-                    var c = tx.get(job.getReference()).get();
-                    if (c.exists() && lease.equals(c.getString("lease")))
-                      tx.update(
-                          job.getReference(),
-                          Map.of(
-                              "attempts",
-                              attempts,
-                              "failed",
-                              attempts >= 20,
-                              "nextAttempt",
-                              attempts >= 20
-                                  ? Long.MAX_VALUE
-                                  : System.currentTimeMillis()
-                                      + Math.min(
-                                          3600000L, 15000L * (1L << Math.min(8, attempts)))));
-                    return true;
-                  }));
-          log.warn("Care push job failed; queued for retry: {}", job.getId());
-        }
-      }
-    } catch (Exception e) {
-      log.error("Care notification worker could not process its queue", e);
-    }
-  }
-
-  @PreDestroy
-  void close() {
-    timers.shutdownNow();
-  }
 }
