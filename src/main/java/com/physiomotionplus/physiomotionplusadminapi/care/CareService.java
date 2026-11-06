@@ -160,7 +160,12 @@ public class CareService {
       participant(a, cursor);
       query = query.startAfter(cursor);
     }
-    return data(await(query.get()));
+    var rows = data(await(query.get()));
+    // Message excerpts are returned only by endpoints that recheck the active connection.
+    if ("careThreads".equals(collection)) rows.forEach(row -> {
+      row.remove("lastMessagePreview"); row.remove("lastMessageSenderRole"); row.remove("lastMessageAt");
+    });
+    return rows;
   }
 
   Object request(Actor a, CareController.Request body) throws Exception {

@@ -141,6 +141,7 @@ class CareIntegrationTest {
     var summary = db.collection("careThreads").document(t).get().get();
     assertEquals("Question", summary.getString("lastMessagePreview"));
     assertEquals("client", summary.getString("lastMessageSenderRole"));
+    assertFalse(((Map<?, ?>) ((List<?>) client.page(alice, "careThreads", "")).getFirst()).containsKey("lastMessagePreview"));
     assertEquals(
         0, db.collection("careOutbox_physio").whereEqualTo("type", "message").get().get().size());
     denied(
