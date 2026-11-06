@@ -378,6 +378,47 @@ public class CareService {
             }));
   }
 
+  Object openModuleVideo(Actor a, String sourceId, String videoId) throws Exception {
+    role(a, "physio");
+    var source = thread(a, sourceId);
+    id(videoId);
+    String title = publishedVideo(videoId);
+    boolean sameModule = false;
+    for (var module : await(db.collection("modules").whereEqualTo("status", "Published").get()).getDocuments()) {
+      if (!(module.get("exercises") instanceof List<?> exercises)) continue;
+      Set<String> videos = new HashSet<>();
+      for (Object item : exercises)
+        if (item instanceof Map<?, ?> exercise && exercise.get("clientExerciseId") instanceof String video)
+          videos.add(video);
+      if (videos.contains(source.getString("videoId")) && videos.contains(videoId)) sameModule = true;
+    }
+    if (!sameModule) throw error(403, "This video is not in the same published module.");
+    return await(db.runTransaction(tx -> {
+      var connection = tx.get(connections().document(source.getString("connectionId"))).get();
+      participant(a, connection);
+      if (!"active".equals(connection.getString("status")))
+        throw error(403, "Connection is not active.");
+      String threadId = hash(connection.getId() + ":" + videoId);
+      var ref = db.collection("careThreads").document(threadId);
+      var existing = tx.get(ref).get();
+      if (existing.exists()) {
+        participant(a, existing);
+        return data(existing);
+      }
+      var record = new HashMap<String, Object>();
+      record.put("connectionId", connection.getId());
+      record.put("videoId", videoId);
+      record.put("title", title);
+      for (String field : List.of("clientId", "physioId", "clientName", "physioName"))
+        record.put(field, connection.getString(field));
+      record.put("updatedAt", System.currentTimeMillis());
+      record.put("sequence", 0L);
+      tx.set(ref, record);
+      record.put("id", threadId);
+      return record;
+    }));
+  }
+
   String publishedVideo(String videoId) throws Exception {
     if (!await(db.collection("exerciseVideos").document(videoId).get()).exists())
       throw error(404, "Video is unavailable.");

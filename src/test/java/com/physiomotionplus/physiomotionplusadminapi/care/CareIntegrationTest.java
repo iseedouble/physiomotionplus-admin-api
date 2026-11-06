@@ -78,6 +78,34 @@ class CareIntegrationTest {
   }
 
   @Test
+  void moduleNavigationKeepsClientContextAndRejectsUnauthorizedVideos() throws Exception {
+    String connection = connect(alice);
+    connect(bob);
+    String source = open(alice), bobSource = open(bob);
+    db.collection("exerciseVideos").document("video-2").set(Map.of("exerciseId", "video-2")).get();
+    db.collection("exerciseVideos").document("video-3").set(Map.of("exerciseId", "video-3")).get();
+    db.collection("modules").document("module-1").update("exercises", List.of(
+        Map.of("clientExerciseId", "video-1", "name", "Exercise"),
+        Map.of("clientExerciseId", "video-2", "name", "Next exercise"))).get();
+    db.collection("modules").document("module-2").set(Map.of("status", "Published", "exercises",
+        List.of(Map.of("clientExerciseId", "video-3", "name", "Other module")))).get();
+    var target = (Map<?, ?>) physio.openModuleVideo(pat, source, "video-2");
+    String targetId = (String) target.get("id");
+    assertEquals("alice", target.get("clientId"));
+    assertEquals(connection, target.get("connectionId"));
+    assertEquals(targetId, ((Map<?, ?>) client.open(alice, "video-2")).get("id"));
+    assertEquals(targetId, ((Map<?, ?>) physio.openModuleVideo(pat, source, "video-2")).get("id"));
+    assertNotEquals(targetId, ((Map<?, ?>) physio.openModuleVideo(pat, bobSource, "video-2")).get("id"));
+    denied(404, () -> physio.openModuleVideo(other, source, "video-2"));
+    denied(404, () -> client.messages(bob, targetId, 0));
+    denied(403, () -> physio.openModuleVideo(pat, source, "video-3"));
+    physio.send(pat, targetId, new CareController.Message("navigation-reply", "Next exercise notes"));
+    assertEquals(1, ((List<?>) client.messages(alice, targetId, 0)).size());
+    physio.decide(pat, connection, "ended");
+    denied(403, () -> physio.openModuleVideo(pat, source, "video-2"));
+  }
+
+  @Test
   void messagesExposeSenderNamesForNewAndExistingMessages() throws Exception {
     connect(alice);
     String t = open(alice);

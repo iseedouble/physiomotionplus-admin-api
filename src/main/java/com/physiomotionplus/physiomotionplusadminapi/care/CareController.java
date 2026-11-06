@@ -98,6 +98,12 @@ public class CareController {
 
   public record OpenThread(String videoId) {}
 
+  @PostMapping("/threads/{id}/videos")
+  Object openModuleVideo(@AuthenticationPrincipal FirebasePrincipal p, @PathVariable String id,
+      @RequestBody OpenThread body) throws Exception {
+    return care.openModuleVideo(actor(p), id, body.videoId());
+  }
+
   @PostMapping("/threads")
   Object open(@AuthenticationPrincipal FirebasePrincipal p, @RequestBody OpenThread body)
       throws Exception {
