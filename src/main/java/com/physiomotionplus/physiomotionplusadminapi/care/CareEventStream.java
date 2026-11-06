@@ -16,19 +16,24 @@ public class CareEventStream {
   private final ScheduledExecutorService timer = Executors.newScheduledThreadPool(2);
   private final ConcurrentMap<String, Set<SseEmitter>> accounts = new ConcurrentHashMap<>();
   private final ConcurrentMap<SseEmitter, Runnable> active = new ConcurrentHashMap<>();
+  private record Subscription(SseEmitter emitter, String lease) {}
+  private final Map<String, Subscription> subscriptions = new HashMap<>();
+  private final Object lifecycle = new Object();
   private static final org.slf4j.Logger log = org.slf4j.LoggerFactory.getLogger(CareEventStream.class);
 
   public CareEventStream(Firestore db, CareService care) { this.db = db; this.care = care; }
 
   SseEmitter open(CareService.Actor actor, String threadId) throws Exception {
+    return open(actor, threadId, UUID.randomUUID().toString(), UUID.randomUUID().toString());
+  }
+
+  SseEmitter open(CareService.Actor actor, String threadId, String subscription, String lease) throws Exception {
+    if (!subscription.matches("[a-zA-Z0-9-]{1,100}") || !lease.matches("[a-zA-Z0-9-]{1,100}"))
+      throw CareService.error(400, "Invalid live subscription.");
     DocumentSnapshot thread = threadId.isEmpty() ? null : care.thread(actor, threadId);
     String key = actor.role() + ":" + actor.uid();
     SseEmitter emitter = new SseEmitter(240_000L);
-    accounts.compute(key, (ignored, existing) -> {
-      Set<SseEmitter> streams = existing == null ? ConcurrentHashMap.newKeySet() : existing;
-      if (streams.size() >= 4 || active.size() >= 500) throw CareService.error(429, "Too many open conversations. Close another tab.");
-      streams.add(emitter); return streams;
-    });
+    String slot = key + ":" + subscription;
     AtomicBoolean closed = new AtomicBoolean();
     List<ListenerRegistration> listeners = new CopyOnWriteArrayList<>();
     List<ScheduledFuture<?>> tasks = new CopyOnWriteArrayList<>();
@@ -36,10 +41,27 @@ public class CareEventStream {
       if (!closed.compareAndSet(false, true)) return;
       listeners.forEach(ListenerRegistration::remove);
       tasks.forEach(task -> task.cancel(false));
-      accounts.computeIfPresent(key, (ignored, streams) -> { streams.remove(emitter); return streams.isEmpty() ? null : streams; });
-      active.remove(emitter);
+      synchronized (lifecycle) {
+        Set<SseEmitter> streams = accounts.get(key);
+        if (streams != null) { streams.remove(emitter); if (streams.isEmpty()) accounts.remove(key); }
+        subscriptions.remove(slot, new Subscription(emitter, lease));
+        active.remove(emitter);
+      }
     };
-    active.put(emitter, stop);
+    synchronized (lifecycle) {
+      Subscription previous = subscriptions.get(slot);
+      if (previous != null) {
+        Runnable release = active.get(previous.emitter());
+        if (release != null) release.run();
+        previous.emitter().complete();
+      }
+      Set<SseEmitter> streams = accounts.computeIfAbsent(key, ignored -> ConcurrentHashMap.newKeySet());
+      if (streams.size() >= 4 || active.size() >= 500)
+        throw CareService.error(429, "Too many open conversations. Close another tab.");
+      streams.add(emitter);
+      subscriptions.put(slot, new Subscription(emitter, lease));
+      active.put(emitter, stop);
+    }
     emitter.onCompletion(stop);
     emitter.onError(ignored -> stop.run());
     emitter.onTimeout(() -> { stop.run(); emitter.complete(); });
@@ -79,6 +101,18 @@ public class CareEventStream {
       send.accept("ready", Map.of());
       return emitter;
     } catch (Exception error) { stop.run(); emitter.complete(); throw error; }
+  }
+
+  void release(CareService.Actor actor, String subscription, String lease) {
+    synchronized (lifecycle) {
+      Subscription current = subscriptions.get(actor.role() + ":" + actor.uid() + ":" + subscription);
+      // A delayed close for an older request must never close its replacement.
+      if (current != null && current.lease().equals(lease)) {
+        Runnable stop = active.get(current.emitter());
+        if (stop != null) stop.run();
+        current.emitter().complete();
+      }
+    }
   }
 
   @PreDestroy void shutdown() {

@@ -10,6 +10,7 @@ public class CareErrors {
   @ExceptionHandler(ResponseStatusException.class)
   ResponseEntity<?> expected(ResponseStatusException e) {
     return ResponseEntity.status(e.getStatusCode())
+        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
         .body(Map.of("message", e.getReason() == null ? "Request failed" : e.getReason()));
   }
 
@@ -23,6 +24,7 @@ public class CareErrors {
     if (e instanceof InterruptedException) Thread.currentThread().interrupt();
     org.slf4j.LoggerFactory.getLogger(getClass()).error("Care request failed", e);
     return ResponseEntity.status(503)
+        .contentType(org.springframework.http.MediaType.APPLICATION_JSON)
         .body(Map.of("message", "Private care is temporarily unavailable. Please retry."));
   }
 }

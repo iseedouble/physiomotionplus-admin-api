@@ -83,6 +83,21 @@ class CareIntegrationTest {
   }
 
   @Test
+  void replacingTheSameLiveSlotDoesNotConsumeMoreAccountCapacity() throws Exception {
+    for (int i = 0; i < 12; i++) {
+      clientEvents.open(alice, "", "one-tab-workspace", "lease-" + i);
+      // Delayed cancellation for the previous connection cannot remove its replacement.
+      if (i > 0) clientEvents.release(alice, "one-tab-workspace", "lease-" + (i - 1));
+    }
+    for (int i = 0; i < 3; i++) clientEvents.open(alice, "", "other-tab-" + i, "lease");
+    denied(429, () -> clientEvents.open(alice, "", "fifth-slot", "lease"));
+    clientEvents.release(bob, "one-tab-workspace", "lease-11");
+    denied(429, () -> clientEvents.open(alice, "", "fifth-slot", "lease"));
+    clientEvents.release(alice, "one-tab-workspace", "lease-11");
+    assertNotNull(clientEvents.open(alice, "", "fifth-slot", "lease"));
+  }
+
+  @Test
   void sameVideoHasIndependentPrivateThreads() throws Exception {
     connect(alice);
     connect(bob);

@@ -30,9 +30,20 @@ public class CareController {
   org.springframework.web.servlet.mvc.method.annotation.SseEmitter events(
       @AuthenticationPrincipal FirebasePrincipal p,
       @RequestParam(defaultValue = "") String thread,
+      @RequestParam(defaultValue = "") String subscription,
+      @RequestParam(defaultValue = "") String lease,
       HttpServletResponse response) throws Exception {
     response.setHeader("X-Accel-Buffering", "no");
-    return live.open(actor(p), thread);
+    return live.open(actor(p), thread,
+        subscription.isEmpty() ? UUID.randomUUID().toString() : subscription,
+        lease.isEmpty() ? UUID.randomUUID().toString() : lease);
+  }
+
+  @DeleteMapping("/events")
+  Object closeEvents(@AuthenticationPrincipal FirebasePrincipal p,
+      @RequestParam String subscription, @RequestParam String lease) {
+    live.release(actor(p), subscription, lease);
+    return Map.of("ok", true);
   }
 
   @GetMapping("/directory")
