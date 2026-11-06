@@ -78,6 +78,25 @@ class CareIntegrationTest {
   }
 
   @Test
+  void inboxShowsOnlyPrivateActiveConversationsWithMessages() throws Exception {
+    String connection = connect(alice), t = open(alice);
+    assertEquals(0, ((List<?>) ((Map<?, ?>) physio.inbox(pat, "")).get("items")).size());
+    client.send(alice, t, new CareController.Message("client-one", "A question about the video"));
+    var items = (List<?>) ((Map<?, ?>) physio.inbox(pat, "")).get("items");
+    assertEquals(1, items.size());
+    assertEquals("A question about the video", ((Map<?, ?>) items.getFirst()).get("lastMessagePreview"));
+    assertEquals(0, ((List<?>) ((Map<?, ?>) physio.inbox(other, "")).get("items")).size());
+    denied(404, () -> physio.thread(other, t));
+    physio.send(pat, t, new CareController.Message("physio-one", "Reply about the exercise"));
+    var replied = (Map<?, ?>) ((List<?>) ((Map<?, ?>) physio.inbox(pat, "")).get("items")).getFirst();
+    assertEquals("physio", replied.get("lastMessageSenderRole"));
+    assertEquals("Reply about the exercise", replied.get("lastMessagePreview"));
+    physio.decide(pat, connection, "ended");
+    assertEquals(0, ((List<?>) ((Map<?, ?>) physio.inbox(pat, "")).get("items")).size());
+    denied(403, () -> physio.thread(pat, t));
+  }
+
+  @Test
   void sameVideoHasIndependentPrivateThreads() throws Exception {
     connect(alice);
     connect(bob);
@@ -119,6 +138,9 @@ class CareIntegrationTest {
     var message = new CareController.Message("unique-id", "Question");
     assertEquals(client.send(alice, t, message), client.send(alice, t, message));
     assertEquals(1, ((List<?>) client.messages(alice, t, 0)).size());
+    var summary = db.collection("careThreads").document(t).get().get();
+    assertEquals("Question", summary.getString("lastMessagePreview"));
+    assertEquals("client", summary.getString("lastMessageSenderRole"));
     assertEquals(
         0, db.collection("careOutbox_physio").whereEqualTo("type", "message").get().get().size());
     denied(

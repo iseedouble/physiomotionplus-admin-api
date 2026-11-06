@@ -301,6 +301,32 @@ public class CareService {
     return t;
   }
 
+  Object inbox(Actor a, String after) throws Exception {
+    role(a, "physio");
+    Query query = own(db.collection("careThreads"), a)
+        .orderBy("updatedAt", Query.Direction.DESCENDING).limit(20);
+    if (!after.isBlank()) {
+      var cursor = await(db.collection("careThreads").document(id(after)).get());
+      participant(a, cursor);
+      query = query.startAfter(cursor);
+    }
+    var page = await(query.get());
+    var candidates = page.getDocuments().stream()
+        .filter(t -> Objects.requireNonNullElse(t.getLong("sequence"), 0L) > 0).toList();
+    var connectionRefs = candidates.stream().map(t -> connections().document(t.getString("connectionId")))
+        .distinct().toArray(DocumentReference[]::new);
+    Set<String> active = new HashSet<>();
+    if (connectionRefs.length > 0) {
+      for (var connection : await(db.getAll(connectionRefs)))
+        if (connection.exists() && a.uid.equals(connection.getString("physioId"))
+            && "active".equals(connection.getString("status"))) active.add(connection.getId());
+    }
+    var items = candidates.stream().filter(t -> active.contains(t.getString("connectionId")))
+        .map(CareService::data).toList();
+    String next = page.size() == 20 ? page.getDocuments().getLast().getId() : "";
+    return Map.of("items", items, "nextCursor", next);
+  }
+
   Object threads(Actor a) throws Exception {
     return data(
         await(
@@ -425,7 +451,9 @@ public class CareService {
                       seq);
               tx.set(msgRef, m);
               tx.set(rateRef, Map.of("lastSent", now));
-              tx.update(ref, Map.of("updatedAt", now, "sequence", seq));
+              tx.update(ref, Map.of("updatedAt", now, "sequence", seq,
+                  "lastMessagePreview", body.substring(0, body.offsetByCodePoints(0, Math.min(160, body.codePointCount(0, body.length())))),
+                  "lastMessageSenderRole", a.role, "lastMessageAt", now));
               tx.update(c.getReference(), "updatedAt", now);
               var result = new HashMap<>(m);
               result.put("id", message.id());

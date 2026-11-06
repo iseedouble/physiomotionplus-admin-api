@@ -85,6 +85,17 @@ public class CareController {
     return care.page(actor(p), "careThreads", after);
   }
 
+  @GetMapping("/inbox")
+  Object inbox(@AuthenticationPrincipal FirebasePrincipal p,
+      @RequestParam(defaultValue = "") String after) throws Exception {
+    return care.inbox(actor(p), after);
+  }
+
+  @GetMapping("/threads/{id}")
+  Object thread(@AuthenticationPrincipal FirebasePrincipal p, @PathVariable String id) throws Exception {
+    return CareService.data(care.thread(actor(p), id));
+  }
+
   public record OpenThread(String videoId) {}
 
   @PostMapping("/threads")
