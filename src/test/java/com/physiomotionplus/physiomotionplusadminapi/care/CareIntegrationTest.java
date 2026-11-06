@@ -78,6 +78,26 @@ class CareIntegrationTest {
   }
 
   @Test
+  void messagesExposeSenderNamesForNewAndExistingMessages() throws Exception {
+    connect(alice);
+    String t = open(alice);
+    var sent = (Map<?, ?>) client.send(alice, t, new CareController.Message("name-client", "Question"));
+    assertEquals(alice.name(), sent.get("senderName"));
+    var reply = (Map<?, ?>) physio.send(pat, t, new CareController.Message("name-physio", "Reply"));
+    assertEquals(pat.name(), reply.get("senderName"));
+    // Earlier stored messages did not include a senderName field.
+    db.collection("careThreads").document(t).collection("messages").document("name-client")
+        .update("senderName", FieldValue.delete()).get();
+    db.collection("careThreads").document(t).collection("messages").document("name-physio")
+        .update("senderName", FieldValue.delete()).get();
+    var history = (List<?>) client.messages(alice, t, 0);
+    assertEquals("Pat", ((Map<?, ?>) history.get(0)).get("senderName"));
+    assertEquals("Alice", ((Map<?, ?>) history.get(1)).get("senderName"));
+    assertEquals("Alice", ((Map<?, ?>) client.send(alice, t,
+        new CareController.Message("name-client", "Question"))).get("senderName"));
+  }
+
+  @Test
   void inboxShowsOnlyPrivateActiveConversationsWithMessages() throws Exception {
     String connection = connect(alice), t = open(alice);
     assertEquals(0, ((List<?>) ((Map<?, ?>) physio.inbox(pat, "")).get("items")).size());

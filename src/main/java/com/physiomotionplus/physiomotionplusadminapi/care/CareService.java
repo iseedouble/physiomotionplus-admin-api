@@ -392,7 +392,7 @@ public class CareService {
   }
 
   Object messages(Actor a, String threadId, long before) throws Exception {
-    thread(a, threadId);
+    var thread = thread(a, threadId);
     Query q =
         db.collection("careThreads")
             .document(threadId)
@@ -400,7 +400,16 @@ public class CareService {
             .orderBy("sequence", Query.Direction.DESCENDING)
             .limit(50);
     if (before > 0) q = q.startAfter(before);
-    return data(await(q.get()));
+    return await(q.get()).getDocuments().stream().map(message -> messageData(message, thread)).toList();
+  }
+
+  static Map<String, Object> messageData(DocumentSnapshot message, DocumentSnapshot thread) {
+    var result = data(message);
+    if (!(result.get("senderName") instanceof String name) || name.isBlank()) {
+      String field = "physio".equals(result.get("senderRole")) ? "physioName" : "clientName";
+      result.put("senderName", Objects.toString(thread.get(field), ""));
+    }
+    return result;
   }
 
   Object send(Actor a, String threadId, CareController.Message message) throws Exception {
@@ -425,7 +434,7 @@ public class CareService {
                     || !a.role.equals(duplicate.getString("senderRole"))
                     || !body.equals(duplicate.getString("body")))
                   throw error(409, "Message identifier was already used.");
-                return data(duplicate);
+                return messageData(duplicate, current);
               }
               var rateRef = db.collection("careRateLimits").document(hash(a.role + ":" + a.uid));
               var rate = tx.get(rateRef).get();
@@ -450,6 +459,8 @@ public class CareService {
                       a.uid,
                       "senderRole",
                       a.role,
+                      "senderName",
+                      a.name,
                       "createdAt",
                       now,
                       "sequence",
